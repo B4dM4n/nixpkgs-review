@@ -86,6 +86,7 @@ class Report:
     def __init__(self, system: str, attrs: List[Attr]) -> None:
         self.system = system
         self.attrs = attrs
+        self.invalid: List[Attr] = []
         self.broken: List[Attr] = []
         self.failed: List[Attr] = []
         self.non_existant: List[Attr] = []
@@ -94,7 +95,9 @@ class Report:
         self.built: List[Attr] = []
 
         for a in attrs:
-            if a.broken:
+            if a.invalid:
+                self.invalid.append(a)
+            elif a.broken:
                 self.broken.append(a)
             elif a.blacklisted:
                 self.blacklisted.append(a)
@@ -132,6 +135,7 @@ class Report:
                 "system": self.system,
                 "pr": pr,
                 "broken": serialize_attrs(self.broken),
+                "invalid": serialize_attrs(self.invalid),
                 "non-existant": serialize_attrs(self.non_existant),
                 "blacklisted": serialize_attrs(self.blacklisted),
                 "failed": serialize_attrs(self.failed),
@@ -155,6 +159,7 @@ class Report:
             "present in ofBorgs evaluation, but not found in the checkout",
         )
         msg += html_pkgs_section(self.blacklisted, "blacklisted")
+        msg += html_pkgs_section(self.invalid, "invalid", "not a derivation")
         msg += html_pkgs_section(self.failed, "failed to build")
         msg += html_pkgs_section(self.tests, "built", what="test")
         msg += html_pkgs_section(self.built, "built")
@@ -172,6 +177,7 @@ class Report:
             "present in ofBorgs evaluation, but not found in the checkout",
         )
         print_number(self.blacklisted, "blacklisted")
+        print_number(self.invalid, "invalid", "not a derivation")
         print_number(self.failed, "failed to build")
         print_number(self.tests, "built", what="tests", log=print)
         print_number(self.built, "built", log=print)

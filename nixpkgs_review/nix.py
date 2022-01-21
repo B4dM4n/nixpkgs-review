@@ -16,6 +16,7 @@ from .utils import ROOT, escape_attr, info, sh, warn
 class Attr:
     name: str
     exists: bool
+    invalid: bool
     broken: bool
     blacklisted: bool
     path: Optional[str]
@@ -153,6 +154,7 @@ def _nix_eval_filter(json: Dict[str, Any]) -> List[Attr]:
         attr = Attr(
             name=name,
             exists=props["exists"],
+            invalid=props["invalid"],
             broken=props["broken"],
             blacklisted=name in blacklist,
             path=props["path"],

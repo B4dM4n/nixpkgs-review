@@ -337,6 +337,7 @@ def package_attrs(
             assert attr.path is not None
             attrs[attr.path] = attr
 
+    # TODO handle invalid packages
     if not ignore_nonexisting and len(nonexisting) > 0:
         warn("These packages do not exist:")
         warn(" ".join(nonexisting))
