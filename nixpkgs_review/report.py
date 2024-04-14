@@ -189,5 +189,5 @@ class Report:
         )
         print_number(self.blacklisted, "blacklisted")
         print_number(self.failed, "failed to build")
-        print_number(self.tests, "built", what="tests", log=print)
+        print_number(self.tests, "built", what="test", log=print)
         print_number(self.built, "built", log=print)
