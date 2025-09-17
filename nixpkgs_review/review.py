@@ -114,6 +114,7 @@ class Review:
         skip_packages_regex: list[Pattern[str]] | None = None,
         checkout: CheckoutOption = CheckoutOption.MERGE,
         sandbox: bool = False,
+        build_tests: bool = False,
         num_parallel_evals: int = 1,
         num_eval_workers: int = 1,
         max_memory_size: int = 4096,
@@ -160,6 +161,7 @@ class Review:
         self.build_graph = build_graph
         self.nixpkgs_config = nixpkgs_config
         self.extra_nixpkgs_config = extra_nixpkgs_config
+        self.build_tests = build_tests
         self.num_parallel_evals = num_parallel_evals
         self.num_eval_workers = num_eval_workers
         self.max_memory_size = max_memory_size
@@ -462,6 +464,7 @@ class Review:
                 self.builddir.nix_path,
                 self.num_eval_workers,
                 self.max_memory_size,
+                self.build_tests,
             )
         return nix_build(
             packages_per_system,
@@ -740,6 +743,7 @@ def package_attrs(
     num_eval_workers: int,
     max_memory_size: int,
     ignore_nonexisting: bool = True,
+    build_tests: bool = False,
 ) -> dict[Path, Attr]:
     attrs: dict[Path, Attr] = {}
 
@@ -752,6 +756,7 @@ def package_attrs(
         nix_path,
         num_eval_workers,
         max_memory_size,
+        build_tests,
     ):
         if not attr.exists:
             nonexisting.append(attr.name)
@@ -774,6 +779,7 @@ def join_packages(
     nix_path: str,
     num_eval_workers: int,
     max_memory_size: int,
+    build_tests: bool,
 ) -> set[str]:
     changed_attrs = package_attrs(
         changed_packages, system, allow, nix_path, num_eval_workers, max_memory_size
@@ -786,6 +792,7 @@ def join_packages(
         num_eval_workers,
         max_memory_size,
         ignore_nonexisting=False,
+        build_tests=build_tests,
     )
 
     # ofborg does not include tests and manual evaluation is too expensive
@@ -815,9 +822,25 @@ def filter_packages(
     nix_path: str,
     num_eval_workers: int,
     max_memory_size: int,
+    build_tests: bool,
 ) -> set[str]:
     packages: set[str] = set()
     assert isinstance(changed_packages, set)
+
+    # If build_tests is set, we need to evaluate the tests at least once, since they are not
+    # included in the changed_packages. Either do it here for all changed_packages or only for
+    # the specified_packages in join_packages.
+    if build_tests and len(specified_packages) == 0:
+        changed_attrs = package_attrs(
+            changed_packages,
+            system,
+            allow,
+            nix_path,
+            num_eval_workers,
+            max_memory_size,
+            build_tests=build_tests,
+        )
+        changed_packages |= {attr.name for attr in changed_attrs.values()}
 
     if (
         len(specified_packages) == 0
@@ -836,6 +859,7 @@ def filter_packages(
             nix_path,
             num_eval_workers,
             max_memory_size,
+            build_tests,
         )
 
     for attr in changed_packages:
@@ -976,6 +1000,7 @@ def review_local_revision(
             build_graph=args.build_graph,
             nixpkgs_config=nixpkgs_config,
             extra_nixpkgs_config=args.extra_nixpkgs_config,
+            build_tests=args.tests,
             num_parallel_evals=args.num_parallel_evals,
         )
         review.review_commit(builddir.path, args.branch, commit, staged, print_result)
