@@ -5,6 +5,7 @@
   python3Packages,
   nixVersions,
   git,
+  nix-eval-jobs,
   bash,
   coreutils,
   bubblewrap,
@@ -19,6 +20,9 @@
   withNom ? false,
 }:
 
+# at least v2.26.0 is required for the '--apply' flag
+assert lib.assertMsg (lib.versionAtLeast nix-eval-jobs.version "2.26")
+  "nix-eval-jobs version is too old. Required is 2.26, found ${nix-eval-jobs.version}";
 let
   withNom' =
     withNom
@@ -49,6 +53,7 @@ python3Packages.buildPythonApplication {
 
       nixVersions.stable
       git
+      nix-eval-jobs
     ]
     ++ lib.optional withSandboxSupport bubblewrap
     ++ lib.optional withNom' nix-output-monitor;
@@ -71,6 +76,7 @@ python3Packages.buildPythonApplication {
         [
           nixVersions.stable
           git
+          nix-eval-jobs
         ]
         ++ lib.optional withSandboxSupport bubblewrap
         ++ lib.optional withNom' nix-output-monitor;

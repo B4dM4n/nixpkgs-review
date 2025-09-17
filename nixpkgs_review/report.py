@@ -189,42 +189,37 @@ def write_error_logs(
                 if attr.blacklisted or attr.drv_path is None:
                     continue
 
-                attr_name: str = f"{attr.name}-{system}"
-
-                if attr.path is not None and attr.path.exists():
+                if not attr.broken:
                     if attr.was_build():
-                        symlink_source = results.ensure().joinpath(attr_name)
+                        symlink_folder = results.ensure()
                     else:
-                        symlink_source = failed_results.ensure().joinpath(attr_name)
-                    if os.path.lexists(symlink_source):
-                        symlink_source.unlink()
-                    symlink_source.symlink_to(attr.path)
+                        symlink_folder = failed_results.ensure()
+                    for name, path in attr.outputs_with_name().items():
+                        symlink_source = symlink_folder.joinpath(f"{name}-{system}")
+
+                        if os.path.lexists(symlink_source):
+                            symlink_source.unlink()
+                        symlink_source.symlink_to(path)
 
                 @pool.submit
                 def future(attr: Attr = attr, system: str = system) -> None:
-                    for path in [f"{attr.drv_path}^*", attr.path]:
-                        if not path:
-                            continue
-
-                        with (
-                            logs.ensure()
-                            .joinpath(get_log_filename(attr, system))
-                            .open("w+") as f
-                        ):
-                            nix_log = subprocess.run(
-                                [
-                                    "nix",
-                                    "--extra-experimental-features",
-                                    "nix-command",
-                                    "log",
-                                    path,
-                                    *extra_nix_log_args,
-                                ],
-                                stdout=f,
-                                check=False,
-                            )
-                            if nix_log.returncode == 0:
-                                break
+                    with (
+                        logs.ensure()
+                        .joinpath(get_log_filename(attr, system))
+                        .open("w+") as f
+                    ):
+                        subprocess.run(
+                            [
+                                "nix",
+                                "--extra-experimental-features",
+                                "nix-command",
+                                "log",
+                                f"{attr.drv_path}^*",
+                                *extra_nix_log_args,
+                            ],
+                            stdout=f,
+                            check=False,
+                        )
 
 
 def _serialize_attrs(attrs: list[Attr]) -> list[str]:
