@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -12,7 +14,6 @@ from enum import Enum
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, cast
 from urllib.error import URLError
-from xml.etree import ElementTree as ET
 
 from . import git, http_requests
 from .builddir import Builddir
@@ -22,6 +23,7 @@ from .nix import Attr, BuildConfig, ShellConfig, multi_system_eval, nix_build, n
 from .nixpkgs import fetch_refs
 from .report import Report, ReportOptions
 from .utils import (
+    ROOT,
     PackageFilter,
     System,
     current_system,
@@ -418,8 +420,7 @@ class Review:
         base_packages: dict[System, list[Package]] = list_packages(
             self.builddir.nix_path,
             self.systems,
-            self.build_config.allow,
-            self.build_config.pkgs,
+            self.build_config,
         )
 
         if head_commit is None:
@@ -432,8 +433,7 @@ class Review:
         merged_packages: dict[System, list[Package]] = list_packages(
             self.builddir.nix_path,
             self.systems,
-            self.build_config.allow,
-            self.build_config.pkgs,
+            self.build_config,
             check_meta=True,
         )
 
@@ -714,119 +714,82 @@ class Review:
         )
 
 
-def _extract_meta_value(elem: ET.Element) -> str:
-    if elem.attrib["type"] == "strings":
-        return ", ".join(e.attrib["value"] for e in elem)
-    return elem.attrib["value"]
+def parse_packages_json(
+    stdout: IO[str],
+    pkgs: str | None,
+) -> dict[System, list[Package]]:
+    packages: dict[System, list[Package]] = {}
 
+    for line in stdout:
+        attrs = json.loads(line)
+        if "error" in attrs:
+            continue
 
-def parse_packages_xml(stdout: IO[str]) -> list[Package]:
-    packages: list[Package] = []
-    current_pkg: Package | None = None
+        system, attr_path = attrs["attr"].split(".", 1)
+        meta = attrs.get("meta") or {}
+        if pkgs:
+            attr_path = f"{pkgs}.{attr_path}"
 
-    context = ET.iterparse(stdout, events=("start", "end"))  # noqa: S314
-    for event, elem in context:
-        if elem.tag == "item" and event == "start":
-            attrs = elem.attrib
-            current_pkg = Package(
-                pname=attrs["pname"],
-                version=attrs["version"],
-                attr_path=attrs["attrPath"],
-                store_path=None,
-                homepage=None,
-                description=None,
-                position=None,
+        packages.setdefault(system, []).append(
+            Package(
+                pname=attrs.get("extraValue", {})["pname"] or attrs["name"],
+                version=attrs.get("extraValue", {})["version"],
+                attr_path=attr_path,
+                store_path=(
+                    attrs["outputs"].get("out") or next(iter(attrs["outputs"].values()))
+                ),
+                homepage=meta.get("homepage"),
+                description=meta.get("description"),
+                position=meta.get("position"),
             )
-        elif (
-            elem.tag == "item"
-            and event == "end"
-            and current_pkg
-            and current_pkg.store_path
-        ):
-            packages.append(current_pkg)
-        elif (
-            elem.tag == "output"
-            and event == "start"
-            and elem.attrib["name"] == "out"
-            and current_pkg
-        ):
-            current_pkg.store_path = elem.attrib["path"]
-        elif elem.tag == "meta" and event == "end" and current_pkg:
-            name = elem.attrib["name"]
-            match name:
-                case "homepage":
-                    current_pkg.homepage = _extract_meta_value(elem)
-                case "description":
-                    current_pkg.description = _extract_meta_value(elem)
-                case "position":
-                    current_pkg.position = _extract_meta_value(elem)
+        )
 
-        # delete element/attribute connections to free up memory, but don't clear
-        # meta `string`s before they are processed
-        if event == "end" and elem.tag != "string":
-            elem.clear()
     return packages
-
-
-def _list_packages_system(
-    system: System,
-    nix_path: str,
-    allow: AllowedFeatures,
-    pkgs: str | None = None,
-    *,
-    check_meta: bool = False,
-) -> list[Package]:
-    cmd = [
-        "nix-env",
-        *([] if allow.url_literals else ["--option", "lint-url-literals", "fatal"]),
-        "--option",
-        "system",
-        system,
-        "-f",
-        "<nixpkgs>",
-        "--nix-path",
-        nix_path,
-        "-qaP",
-        "--xml",
-        "--out-path",
-        "--show-trace",
-        "--allow-import-from-derivation"
-        if allow.ifd
-        else "--no-allow-import-from-derivation",
-        *(["-A", pkgs] if pkgs else []),
-    ]
-    if check_meta:
-        cmd.append("--meta")
-    info("$ " + " ".join(cmd))
-    with tempfile.NamedTemporaryFile(mode="w") as tmp:
-        res = subprocess.run(cmd, stdout=tmp, check=False)
-        if res.returncode != 0:
-            msg = f"Failed to list packages: nix-env failed with exit code {res.returncode}"
-            raise NixpkgsReviewError(msg)
-        tmp.flush()
-        with Path(tmp.name).open() as f:
-            return parse_packages_xml(f)
 
 
 def list_packages(
     nix_path: str,
     systems: set[System],
-    allow: AllowedFeatures,
-    pkgs: str | None = None,
+    build_config: BuildConfig,
     *,
     check_meta: bool = False,
 ) -> dict[System, list[Package]]:
-    results: dict[System, list[Package]] = {}
-    for system in systems:
-        results[system] = _list_packages_system(
-            system=system,
-            nix_path=nix_path,
-            allow=allow,
-            check_meta=check_meta,
-            pkgs=pkgs,
-        )
-
-    return results
+    eval_script = ROOT.joinpath("nix/evalNixpkgs.nix").read_text()
+    systems_str = "{ " + " ".join(f"{system} = null;" for system in systems) + " }"
+    alt_pkgs_atr = "null" if build_config.pkgs is None else f'"{build_config.pkgs}"'
+    cmd = [
+        "nix-eval-jobs",
+        "--workers",
+        str(build_config.num_eval_workers),
+        "--max-memory-size",
+        str(build_config.max_memory_size),
+        "--no-instantiate",
+        "--expr",
+        f"({eval_script}) {systems_str} {alt_pkgs_atr}",
+        "--nix-path",
+        nix_path,
+        "--show-trace",
+        "--allow-import-from-derivation"
+        if build_config.allow.ifd
+        else "--no-allow-import-from-derivation",
+        "--apply",
+        'd: { pname = if d ? pname then d.pname else null; version = if d ? version then d.version else ""; }',
+    ]
+    if check_meta:
+        cmd.append("--meta")
+    info("$ " + shlex.join(cmd))
+    with tempfile.NamedTemporaryFile(mode="w") as tmp:
+        res = subprocess.run(cmd, stdout=tmp, stderr=subprocess.DEVNULL, check=False)
+        if res.returncode != 0:
+            msg = f"Failed to list packages: nix-eval-jobs failed with exit code {res.returncode}"
+            raise NixpkgsReviewError(msg)
+        tmp.flush()
+        with Path(tmp.name).open() as f:
+            packages = parse_packages_json(f, build_config.pkgs)
+            if len(packages) == 0:
+                msg = "Failed to list packages: nix-eval-jobs returned no packages"
+                raise NixpkgsReviewError(msg)
+            return packages
 
 
 def _collect_package_attrs(
