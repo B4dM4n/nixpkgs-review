@@ -148,3 +148,55 @@ def test_rev_command_with_pkg_count(helpers: Helpers, pkg_count: int) -> None:
         )
         pkgs = {f"pkg{x + 1}" for x in range(pkg_count)}
         helpers.assert_built(path, *pkgs)
+
+
+def test_rev_tests(helpers: Helpers) -> None:
+    with helpers.nixpkgs() as nixpkgs:
+        nixpkgs.path.joinpath("pkg1.txt").write_text("foo")
+        subprocess.run(["git", "add", "."], check=True)
+        subprocess.run(["git", "commit", "-m", "example-change"], check=True)
+        path = main(
+            "nixpkgs-review",
+            [
+                "rev",
+                "HEAD",
+                "--remote",
+                str(nixpkgs.remote),
+                "--run",
+                "exit 0",
+                "--build-graph",
+                "nix",
+                "--extra-nixpkgs-config",
+                "{ pkgCount = 2; }",
+                "--tests",
+            ],
+        )
+        helpers.assert_built(path, "pkg1", "pkg2")
+        helpers.assert_tests_built(path, "pkg1.tests.pkg1")
+
+
+def test_rev_tests_alt(helpers: Helpers) -> None:
+    with helpers.nixpkgs() as nixpkgs:
+        nixpkgs.path.joinpath("pkg1.txt").write_text("foo")
+        subprocess.run(["git", "add", "."], check=True)
+        subprocess.run(["git", "commit", "-m", "example-change"], check=True)
+        path = main(
+            "nixpkgs-review",
+            [
+                "rev",
+                "HEAD",
+                "--remote",
+                str(nixpkgs.remote),
+                "--run",
+                "exit 0",
+                "--build-graph",
+                "nix",
+                "--extra-nixpkgs-config",
+                "{ pkgCount = 2; }",
+                "--pkgs",
+                "pkgsAlt",
+                "--tests",
+            ],
+        )
+        helpers.assert_built(path, "pkgsAlt.pkg1", "pkgsAlt.pkg2")
+        helpers.assert_tests_built(path, "pkgsAlt.pkg1.tests.alt-pkg1")

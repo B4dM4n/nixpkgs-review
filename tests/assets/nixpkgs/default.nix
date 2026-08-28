@@ -36,23 +36,27 @@ let
       ln -s $paths $out
     '';
   };
-in
-lib.genAttrs' (lib.range 1 (config.pkgCount or 1)) (
-  i:
-  lib.nameValuePair "pkg${toString i}" (mkDerivation {
-    name = "pkg${toString i}";
+
+  mkPackage = i: prefix: mkDerivation ({
+    name = "${prefix}${toString i}";
     buildCommand = ''
       cat ${./pkg1.txt} > $out
     '';
-  })) // {
+  } // lib.optionalAttrs (i == 1) {
+    passthru.tests."${prefix}${toString i}" = mkDerivation {
+      name = "${prefix}${toString i}-test";
+      buildCommand = ''
+        touch $out
+      '';
+    };
+  });
+in
+lib.genAttrs' (lib.range 1 (config.pkgCount or 1)) (
+  i:
+  lib.nameValuePair "pkg${toString i}" (mkPackage i "pkg")) // {
   inherit lib mkShell bashInteractive stdenv buildEnv;
   pkgsAlt = lib.genAttrs' (lib.range 1 (config.pkgCount or 1)) (
     i:
-    lib.nameValuePair "pkg${toString i}" (mkDerivation {
-      name = "alt-pkg${toString i}";
-      buildCommand = ''
-        cat ${./pkg1.txt} > $out
-      '';
-    })
+    lib.nameValuePair "pkg${toString i}" (mkPackage i "alt-pkg")
   );
 }

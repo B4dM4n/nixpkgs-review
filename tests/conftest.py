@@ -187,6 +187,13 @@ class Helpers:
         } == {*pkg_names}
 
     @staticmethod
+    def assert_tests_built(path: str, *pkg_names: str) -> None:
+        report = Helpers.load_report(path)
+        assert {
+            attr["name"] for attr in report["result"][current_system()]["tests"]
+        } == {*pkg_names}
+
+    @staticmethod
     @contextmanager
     def save_environ() -> Iterator[None]:
         old = os.environ.copy()
